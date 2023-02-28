@@ -212,8 +212,6 @@ contract DecentrapadFairLaunch is Ownable, Pausable {
             } else {
                 addNativeLiquidity(token0Amount, token1Amount);
             }
-       
-            // return the remaining tokens to owner if any
         dexInfo.liquidityLockTime += block.timestamp;
         }
 
@@ -311,7 +309,7 @@ contract DecentrapadFairLaunch is Ownable, Pausable {
    
     function claimLP() external onlyOwner {
         require(poolData.status == PoolStatus.COMPLETED, "Pool not completed");
-        require(dexInfo.liquidityLockTime > block.timestamp, "LP locked");
+        require(dexInfo.liquidityLockTime < block.timestamp, "LP locked");
         //  //if payment token is bnb(address 0) then it will take our native token
         address token0;
         if(launchInfo.paymentToken == address(0)){
