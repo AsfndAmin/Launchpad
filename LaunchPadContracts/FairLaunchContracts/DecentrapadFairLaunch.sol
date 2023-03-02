@@ -24,6 +24,7 @@ contract DecentrapadFairLaunch is Ownable, Pausable {
     event TokensBought(address user, uint256 amount);
     event tokensClaimed(address user, uint256 amount, PoolStatus);
     event poolCancelled(address user);
+    event tokenDistributed(address user, uint256 amount);
 
     enum PoolStatus {
         ACTIVE,
@@ -39,8 +40,7 @@ contract DecentrapadFairLaunch is Ownable, Pausable {
         uint256 softCap;
         uint256 startTime;
         uint256 endTime;
-        uint256 minBuyLimit;
-        uint256 maxBuyLimit;
+        uint256 referReward;
     }
     launchSaleInfo public launchInfo;
 
@@ -48,7 +48,6 @@ contract DecentrapadFairLaunch is Ownable, Pausable {
         uint256 maxTokensForLiquidity;
         uint256 lpTokensRatio;
         uint256 liquidityLockTime;
-        bool dexListing;
 
     }
     dexListingInfo public dexInfo;
@@ -59,15 +58,26 @@ contract DecentrapadFairLaunch is Ownable, Pausable {
         PoolStatus status;
     }
     launchPoolData public poolData;
+
+
+
     address public platformAddress = 0x83278c3DCd78d5270f9726684f76962F3ce18ad0;
     uint256 public platformFee;
     mapping(address => uint256) public UserInvestments;
+    mapping(address => uint256) public referComission;
+    mapping(uint256 => address) public userInvestmentIndex;
+    uint256 public index;
+
+
+    uint256 public totalReferReward;
+     bool public referRewardStatus;
 
     constructor(
         launchSaleInfo memory _launchInfo,
         dexListingInfo memory _listingInfo,
         address owner,
-        bool _listingOnDex
+        bool _listingOnDex,
+        bool _referRewardStatus 
     ) {
         transferOwnership(owner);
         launchInfo = _launchInfo;
@@ -75,6 +85,7 @@ contract DecentrapadFairLaunch is Ownable, Pausable {
         listingOnDex = _listingOnDex;
         platformFee = 50; // 5%
         poolData.status = PoolStatus.ACTIVE;
+        referRewardStatus = _referRewardStatus;
     }
 
     function updatesoftCap(uint256 _softCap) public onlyOwner {
@@ -95,14 +106,13 @@ contract DecentrapadFairLaunch is Ownable, Pausable {
         launchInfo.endTime = newendTime;
     }
 
-    function buyTokens(uint256 paymentAmount)
+    function buyTokens(address referAddress, uint256 paymentAmount)
         external
         whenNotPaused
         payable
     {
         require(block.timestamp > launchInfo.startTime, "Sale not started yet");
         require(block.timestamp < launchInfo.endTime, "Sale Ended");
-        require(paymentAmount >= launchInfo.minBuyLimit && paymentAmount <= launchInfo.maxBuyLimit,"Invalid Amount sent");
         require(poolData.status != PoolStatus.CANCELED, "Pool not active");
         
         if(launchInfo.paymentToken != address(0)) {
@@ -111,9 +121,31 @@ contract DecentrapadFairLaunch is Ownable, Pausable {
             require(msg.value == paymentAmount, "ether check");
         }
         UserInvestments[msg.sender] += paymentAmount;
+        // bool present;
+        // for(uint256 i=0; i<=index; i++){
+        //     if(userInvestmentIndex[i] == msg.sender){
+        //         present = true;
+        //     }
+        // }
+
+        // if(!present){
+        //     userInvestmentIndex[index] == msg.sender;
+        //     index++;
+        // }
+        
+
 
         poolData.totalRaised = poolData.totalRaised.add(paymentAmount);
 
+        if (referRewardStatus) {
+            if (referAddress != address(0)) {
+                uint256 userComission = paymentAmount
+                    .mul(launchInfo.referReward)
+                    .div(1000);
+                referComission[referAddress] += userComission;
+                totalReferReward += userComission;
+            }
+        }
         emit TokensBought(msg.sender, paymentAmount);
     } 
     function calculateShare(uint256 _userContributions) public view returns(uint256){
@@ -131,6 +163,25 @@ contract DecentrapadFairLaunch is Ownable, Pausable {
         return usersShare;
     }
 
+    // function distributeTokens(uint256 _startingIndex, uint256 _endingIndex) external onlyOwner{
+    //     require(poolData.status == PoolStatus.COMPLETED, "not finalized");
+    //     require(_endingIndex <= index, "not much contributer");
+    //     require(_startingIndex < _endingIndex, "starting indx should be less than ending");
+        
+    //     for(uint256 i=_startingIndex; i<=_endingIndex; i++){
+    //         address user = userInvestmentIndex[i];
+    //         if(UserInvestments[user] != 0){
+    //             uint256 userContribution = UserInvestments[user];
+    //             uint256 userShare = calculateShare(userContribution); 
+    //             UserInvestments[msg.sender] = 0;
+    //             ERC20(launchInfo.tokenAddress).safeTransfer(user, userShare);
+    //             poolData.totalTokensClaimed += userShare;
+    //             emit tokenDistributed(user, userShare);
+    //         }
+    //     }
+        
+    // }
+
 
     function userClaim() external {
         uint256 userContribution = UserInvestments[msg.sender];
@@ -140,6 +191,10 @@ contract DecentrapadFairLaunch is Ownable, Pausable {
         uint256 claimedAmount;
 
         if(poolData.status == PoolStatus.ACTIVE) {
+                        require(
+                !referRewardStatus,
+                "Cannot claim early due to refer rewards"
+            );
             if(poolData.totalRaised < launchInfo.softCap) {
                 uint256 earlyClaimPenalty = userContribution.mul(100).div(10);
                 uint256 remainingContribution = userContribution.sub(earlyClaimPenalty);
@@ -185,6 +240,31 @@ contract DecentrapadFairLaunch is Ownable, Pausable {
 
     }
 
+        function claimReferReward() external {
+        require(referRewardStatus, "Refer reward not exists");
+        require(poolData.status == PoolStatus.COMPLETED, "not finalized");
+
+        uint256 userReward = referComissionAmount(msg.sender);
+        require(userReward > 0, "zero reward");
+         if(launchInfo.paymentToken != address(0)) {
+                    ERC20(launchInfo.paymentToken).safeTransfer(msg.sender, userReward);
+
+                } else {
+
+                    payable(msg.sender).transfer(userReward);
+                }
+
+        // emit user, amount
+    }
+
+        function referComissionAmount(address user) public view returns (uint256) {
+        if (poolData.status == PoolStatus.CANCELED) {
+            return 0;
+        } else {
+            return referComission[user];
+        }
+    }
+
     function finalizeLaunch() external onlyOwner {
         require(block.timestamp >= launchInfo.endTime, "Sale not ended");//working
         require(poolData.status != PoolStatus.COMPLETED, "Already finalized");//working
@@ -215,21 +295,25 @@ contract DecentrapadFairLaunch is Ownable, Pausable {
         dexInfo.liquidityLockTime += block.timestamp;
         }
 
-      require(raisedAfterPlatformFee > token1Amount, "amount greater than raised");
-       uint256 raisedAfterLPAndFee = raisedAfterPlatformFee.sub(token1Amount);
+       require(raisedAfterPlatformFee > token1Amount, "amount greater than raised");
+       uint256 raisedAfterLPAndFee = raisedAfterPlatformFee.sub(token1Amount);       
+       uint256 affiliateShare = (totalAmountRaised.mul(launchInfo.referReward)).div(1000);
+       uint256 ownerShare = raisedAfterLPAndFee - affiliateShare;
 
        // send remaining BNB/ERC tokens back to owner
         if(launchInfo.paymentToken != address(0)) {
-            ERC20(launchInfo.paymentToken).safeTransfer(msg.sender, raisedAfterLPAndFee);
+            ERC20(launchInfo.paymentToken).safeTransfer(msg.sender, ownerShare);
         } else {
-            payable(msg.sender).transfer(raisedAfterLPAndFee);
+            payable(msg.sender).transfer(ownerShare);
             } 
 
     }
 
     function calculateLPShare(uint256 _amountRaised) public view returns(uint256, uint256) {
-        uint256 tokens0RequiredForLP = (launchInfo.tokensForSale).mul(1000).div(dexInfo.lpTokensRatio);
-        uint256 token1RequiredForLP = _amountRaised.mul(1000).div(dexInfo.lpTokensRatio);
+        uint256 calculate = launchInfo.tokensForSale.mul(platformFee).div(1000);
+        uint256 token0forLP = (launchInfo.tokensForSale - calculate);
+        uint256 tokens0RequiredForLP = (token0forLP).mul(dexInfo.lpTokensRatio).div(1000);
+        uint256 token1RequiredForLP = _amountRaised.mul(dexInfo.lpTokensRatio).div(1000);
                 return (tokens0RequiredForLP, token1RequiredForLP);
 
     }
