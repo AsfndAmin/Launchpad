@@ -17,14 +17,16 @@ contract DecentraFairLaunchFactory {
         DecentrapadFairLaunch.launchSaleInfo memory _launchInfo,
         DecentrapadFairLaunch.dexListingInfo memory _listingInfo,
         address owner,
-        bool _listingDex
+        bool _listingDex,
+        bool _referRewardStatus 
     ) external {
         uint256 totalTokensRequired = _launchInfo.tokensForSale.add(_listingInfo.maxTokensForLiquidity);
         DecentrapadFairLaunch decentraPool = new DecentrapadFairLaunch(
             _launchInfo,
             _listingInfo,
             owner,
-            _listingDex
+            _listingDex,
+            _referRewardStatus
             
         );
         ERC20(_launchInfo.tokenAddress).safeTransferFrom(msg.sender, address(decentraPool), totalTokensRequired);
