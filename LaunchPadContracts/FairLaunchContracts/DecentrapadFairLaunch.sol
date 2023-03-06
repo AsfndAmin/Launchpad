@@ -25,6 +25,7 @@ contract DecentrapadFairLaunch is Ownable, Pausable {
     event tokensClaimed(address user, uint256 amount, PoolStatus);
     event poolCancelled(address user);
     event tokenDistributed(address user, uint256 amount);
+    event referalRewardClaimed(address user, uint256 amount);
 
     enum PoolStatus {
         ACTIVE,
@@ -41,28 +42,36 @@ contract DecentrapadFairLaunch is Ownable, Pausable {
         uint256 startTime;
         uint256 endTime;
         uint256 referReward;
+        uint256 maxContribution;
     }
-    launchSaleInfo public launchInfo;
+    
 
     struct dexListingInfo {
-        uint256 maxTokensForLiquidity;
         uint256 lpTokensRatio;
         uint256 liquidityLockTime;
 
     }
-    dexListingInfo public dexInfo;
+   
 
     struct launchPoolData {
         uint256 totalRaised;
         uint256 totalTokensClaimed;
         PoolStatus status;
     }
+
+    struct poolFee {
+        uint256 nativeFee;
+        uint256 tokenFee;
+    }
+
     launchPoolData public poolData;
+    dexListingInfo public dexInfo;
+    launchSaleInfo public launchInfo;
+    poolFee public poolFees;
 
+    address public platformAddress;
+    bool public feesInNative;
 
-
-    address public platformAddress = 0x83278c3DCd78d5270f9726684f76962F3ce18ad0;
-    uint256 public platformFee;
     mapping(address => uint256) public UserInvestments;
     mapping(address => uint256) public referComission;
     mapping(uint256 => address) public userInvestmentIndex;
@@ -72,20 +81,32 @@ contract DecentrapadFairLaunch is Ownable, Pausable {
     uint256 public totalReferReward;
      bool public referRewardStatus;
 
+     bool public maxContributionEnabled; 
+
     constructor(
         launchSaleInfo memory _launchInfo,
         dexListingInfo memory _listingInfo,
+        poolFee memory _poolFees,
         address owner,
         bool _listingOnDex,
-        bool _referRewardStatus 
+        bool _referRewardStatus,
+        bool _maxContribution,
+        address _platform
+        
     ) {
         transferOwnership(owner);
         launchInfo = _launchInfo;
         dexInfo = _listingInfo;
         listingOnDex = _listingOnDex;
-        platformFee = 50; // 5%
+        poolFees = _poolFees;
         poolData.status = PoolStatus.ACTIVE;
         referRewardStatus = _referRewardStatus;
+        maxContributionEnabled = _maxContribution; 
+        platformAddress = _platform;
+        if(!_referRewardStatus){
+            require(_launchInfo.referReward == 0, "refer not active");
+        }
+        
     }
 
     function updatesoftCap(uint256 _softCap) public onlyOwner {
@@ -114,6 +135,10 @@ contract DecentrapadFairLaunch is Ownable, Pausable {
         require(block.timestamp > launchInfo.startTime, "Sale not started yet");
         require(block.timestamp < launchInfo.endTime, "Sale Ended");
         require(poolData.status != PoolStatus.CANCELED, "Pool not active");
+
+        if(maxContributionEnabled){
+            require( (UserInvestments[msg.sender] + paymentAmount) <= launchInfo.maxContribution , "max Contribution check");
+        }
         
         if(launchInfo.paymentToken != address(0)) {
             ERC20(launchInfo.paymentToken).safeTransferFrom(msg.sender, address(this), paymentAmount);
@@ -121,27 +146,15 @@ contract DecentrapadFairLaunch is Ownable, Pausable {
             require(msg.value == paymentAmount, "ether check");
         }
         UserInvestments[msg.sender] += paymentAmount;
-        // bool present;
-        // for(uint256 i=0; i<=index; i++){
-        //     if(userInvestmentIndex[i] == msg.sender){
-        //         present = true;
-        //     }
-        // }
-
-        // if(!present){
-        //     userInvestmentIndex[index] == msg.sender;
-        //     index++;
-        // }
-        
 
 
         poolData.totalRaised = poolData.totalRaised.add(paymentAmount);
 
         if (referRewardStatus) {
             if (referAddress != address(0)) {
-                uint256 userComission = paymentAmount
-                    .mul(launchInfo.referReward)
-                    .div(1000);
+                uint256 tokenFee = paymentAmount.mul(poolFees.nativeFee).div(1000);
+                uint256 amount = paymentAmount.sub(tokenFee);
+                uint256 userComission = amount.mul(launchInfo.referReward).div(1000);
                 referComission[referAddress] += userComission;
                 totalReferReward += userComission;
             }
@@ -149,39 +162,20 @@ contract DecentrapadFairLaunch is Ownable, Pausable {
         emit TokensBought(msg.sender, paymentAmount);
     } 
     function calculateShare(uint256 _userContributions) public view returns(uint256){
+        require(_userContributions >= 100, "too less contribution");
         uint256 _totalAmountRaised = poolData.totalRaised;
         uint256 _tokensForSale = launchInfo.tokensForSale;
-        uint256 _tokenDecimals = 10**(ERC20(launchInfo.tokenAddress).decimals()); 
+        //uint256 _tokenDecimals = 10**(ERC20(launchInfo.tokenAddress).decimals()); 
         uint256 _paymentDecimals;
         if(launchInfo.paymentToken != address(0)) {
           _paymentDecimals = 10**(ERC20(launchInfo.paymentToken).decimals());
         } else {
           _paymentDecimals = 10**18;
         }
-        uint256 share = ((_tokensForSale * _tokenDecimals) * _paymentDecimals)/(_totalAmountRaised * _paymentDecimals);
-        uint256 usersShare = (_userContributions * share)/_paymentDecimals;
+       uint256 _share = ((_tokensForSale)*_paymentDecimals) / ((_totalAmountRaised));
+        uint256 usersShare = (_userContributions * _share)/(_paymentDecimals);
         return usersShare;
     }
-
-    // function distributeTokens(uint256 _startingIndex, uint256 _endingIndex) external onlyOwner{
-    //     require(poolData.status == PoolStatus.COMPLETED, "not finalized");
-    //     require(_endingIndex <= index, "not much contributer");
-    //     require(_startingIndex < _endingIndex, "starting indx should be less than ending");
-        
-    //     for(uint256 i=_startingIndex; i<=_endingIndex; i++){
-    //         address user = userInvestmentIndex[i];
-    //         if(UserInvestments[user] != 0){
-    //             uint256 userContribution = UserInvestments[user];
-    //             uint256 userShare = calculateShare(userContribution); 
-    //             UserInvestments[msg.sender] = 0;
-    //             ERC20(launchInfo.tokenAddress).safeTransfer(user, userShare);
-    //             poolData.totalTokensClaimed += userShare;
-    //             emit tokenDistributed(user, userShare);
-    //         }
-    //     }
-        
-    // }
-
 
     function userClaim() external {
         uint256 userContribution = UserInvestments[msg.sender];
@@ -245,7 +239,9 @@ contract DecentrapadFairLaunch is Ownable, Pausable {
         require(poolData.status == PoolStatus.COMPLETED, "not finalized");
 
         uint256 userReward = referComissionAmount(msg.sender);
+        
         require(userReward > 0, "zero reward");
+        referComission[referAddress] = 0;
          if(launchInfo.paymentToken != address(0)) {
                     ERC20(launchInfo.paymentToken).safeTransfer(msg.sender, userReward);
 
@@ -253,8 +249,8 @@ contract DecentrapadFairLaunch is Ownable, Pausable {
 
                     payable(msg.sender).transfer(userReward);
                 }
+          emit  referalRewardClaimed(msg.sender, userReward);
 
-        // emit user, amount
     }
 
         function referComissionAmount(address user) public view returns (uint256) {
@@ -273,19 +269,29 @@ contract DecentrapadFairLaunch is Ownable, Pausable {
 
         poolData.status = PoolStatus.COMPLETED;
         uint256 totalAmountRaised = poolData.totalRaised;
-        uint256 platformShare = calculatePlatformShare(totalAmountRaised);
+        (uint256 platformNativeShare, uint256 platformTokenShare) = calculatePlatformShare(totalAmountRaised);
                 // cut platform fees    
         if(launchInfo.paymentToken != address(0)) {
-            ERC20(launchInfo.paymentToken).safeTransfer(platformAddress, platformShare);
+            ERC20(launchInfo.paymentToken).safeTransfer(platformAddress, platformNativeShare);
         } else {
-                payable(platformAddress).transfer(platformShare);
+                payable(platformAddress).transfer(platformNativeShare);
             } 
 
-        uint256 raisedAfterPlatformFee = totalAmountRaised.sub(platformShare);
-        (uint256 token0Amount, uint256 token1Amount) = calculateLPShare(raisedAfterPlatformFee);
+        if(platformTokenShare != 0){
+            ERC20(launchInfo.tokenAddress).safeTransfer(platformAddress, platformTokenShare);
+        }    
+
+        uint256 raisedAfterPlatformFee = totalAmountRaised.sub(platformNativeShare);
+        uint256 affiliateShare = (raisedAfterPlatformFee.mul(launchInfo.referReward)).div(1000);
+        uint256 amountAfterAffiliate = raisedAfterPlatformFee.sub(affiliateShare);
+
+        uint256 token0Amount;
+        uint256 token1Amount;
 
         // handle LP
         if(listingOnDex) {
+              token0Amount = calculateliquidityAmount();
+              token1Amount = calculateLPShare(amountAfterAffiliate);
             _checkPairCreated();
             if(launchInfo.paymentToken != address(0)) {
                 addLiquidity(token0Amount, token1Amount);
@@ -295,31 +301,22 @@ contract DecentrapadFairLaunch is Ownable, Pausable {
         dexInfo.liquidityLockTime += block.timestamp;
         }
 
-       require(raisedAfterPlatformFee > token1Amount, "amount greater than raised");
-       uint256 raisedAfterLPAndFee = raisedAfterPlatformFee.sub(token1Amount);       
-       uint256 affiliateShare = (totalAmountRaised.mul(launchInfo.referReward)).div(1000);
-       uint256 ownerShare = raisedAfterLPAndFee - affiliateShare;
+       require(amountAfterAffiliate > token1Amount, "amount greater than raised");
+       uint256 raisedAfterLPAndFees = amountAfterAffiliate.sub(token1Amount);     
 
-       // send remaining BNB/ERC tokens back to owner
         if(launchInfo.paymentToken != address(0)) {
-            ERC20(launchInfo.paymentToken).safeTransfer(msg.sender, ownerShare);
+            ERC20(launchInfo.paymentToken).safeTransfer(msg.sender, raisedAfterLPAndFees);
         } else {
-            payable(msg.sender).transfer(ownerShare);
+            payable(msg.sender).transfer(raisedAfterLPAndFees);
             } 
 
     }
 
-    function calculateLPShare(uint256 _amountRaised) public view returns(uint256, uint256) {
-        uint256 calculate = launchInfo.tokensForSale.mul(platformFee).div(1000);
-        uint256 token0forLP = (launchInfo.tokensForSale - calculate);
-        uint256 tokens0RequiredForLP = (token0forLP).mul(dexInfo.lpTokensRatio).div(1000);
+    function calculateLPShare(uint256 _amountRaised) public view returns(uint256) {
         uint256 token1RequiredForLP = _amountRaised.mul(dexInfo.lpTokensRatio).div(1000);
-                return (tokens0RequiredForLP, token1RequiredForLP);
-
+               return  token1RequiredForLP;
     }
 
-
-    //if payment token is bnb(address 0) then it will take our native token
     function _checkPairCreated() public returns(bool) {
         address token0;
         if(launchInfo.paymentToken == address(0)){
@@ -335,12 +332,33 @@ contract DecentrapadFairLaunch is Ownable, Pausable {
         }
             return true; 
     }
+    //working fine
+    function calculatePlatformShare(uint256 _amountRaised) public view returns(uint256, uint256) {
+        uint256 platformNativeShare = _amountRaised.mul(poolFees.nativeFee).div(1000);        
+        uint256 platformTokenShare = launchInfo.tokensForSale.mul(poolFees.tokenFee).div(1000); 
 
-    function calculatePlatformShare(uint256 _amountRaised) public view returns(uint256) {
-        uint256 platformFeeAmount = _amountRaised.mul(platformFee).div(1000);//multiplied with platformfee and divided with 1000
-
-        return platformFeeAmount;
+        return (platformNativeShare, platformTokenShare);
     }
+
+    function calculateLpTokens() public view returns(uint256){
+            return launchInfo.tokensForSale.mul(dexInfo.lpTokensRatio).div(1000);
+
+    }
+
+    function calculateliquidityAmount() public view returns(uint256){
+        uint256 amount;
+        if(poolFees.tokenFee > 0){
+            uint256 lpAmount = calculateLpTokens();
+            uint256 tokenFee = lpAmount.mul(poolFees.tokenFee).div(1000);
+            amount = lpAmount.sub(tokenFee);
+        }else{
+         uint256 lpAmount = calculateLpTokens();
+            uint256 tokenFee = lpAmount.mul(poolFees.nativeFee).div(1000);
+            amount = lpAmount.sub(tokenFee);
+        }
+        return amount;
+    }
+
 
     // if owner cancel the pool, he will get all his tokens back, and cannot 
     // claim any payment tokens
