@@ -416,14 +416,14 @@ library SafeMath {
 }
 
 
-// Dependency file: contracts/interfaces/IPinkAntiBot.sol
+// Dependency file: contracts/interfaces/IDecentraAntiBot.sol
 
 // pragma solidity >=0.5.0;
 
-interface IPinkAntiBot {
+interface IDecentraAntiBot {
   function setTokenOwner(address owner) external;
 
-  function onPreTransferCheck(
+  function transferValidation(
     address from,
     address to,
     uint256 amount
@@ -458,12 +458,12 @@ abstract contract BaseToken {
 
 // Root file: contracts/standard/AntiBotStandardToken.sol
 
-pragma solidity =0.8.4;
+pragma solidity ^0.8.4;
 
 // import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 // import "@openzeppelin/contracts/access/Ownable.sol";
 // import "@openzeppelin/contracts/utils/math/SafeMath.sol";
-// import "contracts/interfaces/IPinkAntiBot.sol";
+// import "contracts/interfaces/IDecentraAntiBot.sol";
 // import "contracts/BaseToken.sol";
 
 contract AntiBotStandardToken is IERC20, Ownable, BaseToken {
@@ -479,7 +479,7 @@ contract AntiBotStandardToken is IERC20, Ownable, BaseToken {
     uint8 private _decimals;
     uint256 private _totalSupply;
 
-    IPinkAntiBot public pinkAntiBot;
+    IDecentraAntiBot public decentraAntiBot;
     bool public enableAntiBot;
 
     constructor(
@@ -487,7 +487,7 @@ contract AntiBotStandardToken is IERC20, Ownable, BaseToken {
         string memory symbol_,
         uint8 decimals_,
         uint256 totalSupply_,
-        address pinkAntiBot_,
+        address decentraAntiBot_,
         address serviceFeeReceiver_,
         uint256 serviceFee_
     ) payable {
@@ -496,8 +496,8 @@ contract AntiBotStandardToken is IERC20, Ownable, BaseToken {
         _decimals = decimals_;
         _mint(owner(), totalSupply_);
 
-        pinkAntiBot = IPinkAntiBot(pinkAntiBot_);
-        pinkAntiBot.setTokenOwner(owner());
+        decentraAntiBot = IDecentraAntiBot(decentraAntiBot_);
+        decentraAntiBot.setTokenOwner(owner());
         enableAntiBot = true;
 
         emit TokenCreated(
@@ -722,7 +722,7 @@ contract AntiBotStandardToken is IERC20, Ownable, BaseToken {
         require(recipient != address(0), "ERC20: transfer to the zero address");
 
         if (enableAntiBot) {
-            pinkAntiBot.onPreTransferCheck(sender, recipient, amount);
+            decentraAntiBot.transferValidation(sender, recipient, amount);
         }
 
         _beforeTokenTransfer(sender, recipient, amount);

@@ -2,23 +2,24 @@
 pragma solidity ^0.8.10;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "./IPinkAntiBot.sol";
-import "https://github.com/pancakeswap/pancake-smart-contracts/blob/master/projects/exchange-protocol/contracts/interfaces/IPancakeRouter02.sol";
-import "https://github.com/pancakeswap/pancake-smart-contracts/blob/master/projects/exchange-protocol/contracts/interfaces/IPancakeFactory.sol";
+import "./IDecentraAntiBot.sol";
+import "@uniswap/v2-periphery/contracts/interfaces/IUniswapV2Router02.sol";
+import "@uniswap/v2-core/contracts/interfaces/IUniswapV2Factory.sol";
 
-
-contract PinkAntiBot {
-
-   // Anti-bot and anti-whale mappings and variables
-    mapping(address => mapping(address => uint256)) public _holderLastTransferTimestamp;
-    mapping(address => mapping(address => bool)) public _isExcludedMaxTransactionAmount;
-    mapping(address => mapping(address => bool)) public automatedMarketMakerPairs;
+contract DecentraAntiBot {
+    event BoughtEarly(address indexed sniper);
+    // Anti-bot and anti-whale mappings and variables
+    mapping(address => mapping(address => uint256))
+        public _holderLastTransferTimestamp;
+    mapping(address => mapping(address => bool))
+        public _isExcludedMaxTransactionAmount;
+    mapping(address => mapping(address => bool))
+        public automatedMarketMakerPairs;
     mapping(address => mapping(address => bool)) public blocked;
 
-
-      struct tokenData {
+    struct tokenData {
         address owner;
-        address routerAddress;
+        IUniswapV2Router02 routerAddress;
         address pairAddress;
         uint256 maxAmountPerTrade;
         uint256 amountAddedPerBlock;
@@ -31,153 +32,191 @@ contract PinkAntiBot {
         bool tradingEnabled;
     }
 
-    mapping(address => tokenData) _tokenAntiBotData;
+    mapping(address => tokenData) tokenAntiBotData;
 
-    event BoughtEarly(address indexed sniper);
+    modifier onlyOwner(address tokenAddress) {
+        require(
+            tokenAntiBotData[tokenAddress].owner == msg.sender,
+            "caller not owner of token"
+        );
+        _;
+    }
 
-    constructor(){}
+    constructor() {}
 
     function setTokenOwner(address _owner) external {
-        require(_tokenAntiBotData[msg.sender].owner == address(0), "already set");
-        _tokenAntiBotData[msg.sender].owner = _owner;
+        require(
+            tokenAntiBotData[msg.sender].owner == address(0),
+            "already set"
+        );
+        tokenAntiBotData[msg.sender].owner = _owner;
     }
 
-        function setTradingEnabled(address tokenAddress, address _tokenB, address _v2router, bool status) external {
-        require(_tokenAntiBotData[tokenAddress].owner == msg.sender, "caller not owner of token");
-        IPancakeRouter02 router = IPancakeRouter02(_v2router);
-        address pair = IPancakeFactory(router.factory()).getPair(tokenAddress, _tokenB);
+    function setTradingEnabled(
+        address tokenAddress,
+        address _tokenB,
+        IUniswapV2Router02 _v2router,
+        bool status
+    ) external onlyOwner(tokenAddress) {
+        address pair = _getPair(_v2router, tokenAddress, _tokenB);
         require(pair != address(0), "no pair created");
-            if(IERC20(pair).totalSupply() == 0){
-                _tokenAntiBotData[tokenAddress].tradingEnabled = status;
-            }else{
-                require(status != true, "liquidity already added");
-                _tokenAntiBotData[tokenAddress].tradingEnabled = status;
-            }
-        
-
+        if (IERC20(pair).totalSupply() == 0) {
+            tokenAntiBotData[tokenAddress].tradingEnabled = status;
+        } else {
+            require(status != true, "liquidity already added");
+            tokenAntiBotData[tokenAddress].tradingEnabled = status;
+        }
     }
 
-    function onPreTransferCheck(
+    function _getPair(
+        IUniswapV2Router02 router,
+        address tokenA,
+        address tokenB
+    ) internal view returns (address) {
+        return IUniswapV2Factory(router.factory()).getPair(tokenA, tokenB);
+    }
+
+    function transferValidation(
         address from,
         address to,
         uint256 amount
     ) external {
         address tokenAddress = msg.sender;
-        if(_tokenAntiBotData[tokenAddress].tradingEnabled){
-        require(!blocked[tokenAddress][from], "Sniper blocked");
-        _tokenAntiBotData[tokenAddress].maxAmountPerTrade += ((block.number - _tokenAntiBotData[tokenAddress].launchBlock)*_tokenAntiBotData[tokenAddress].amountAddedPerBlock);
-
-        if (_tokenAntiBotData[tokenAddress].limitsInEffect) {
-            if (
-                from != _tokenAntiBotData[tokenAddress].owner &&
-                to != _tokenAntiBotData[tokenAddress].owner &&
-                to != address(0) &&
-                to != address(0xdead)
-                
-            ) {
-
-
+        if (tokenAntiBotData[tokenAddress].tradingEnabled) {
+            require(!blocked[tokenAddress][from], "Sniper blocked");
+            // make this simpler
+            tokenAntiBotData[tokenAddress].maxAmountPerTrade += ((block.number -
+                tokenAntiBotData[tokenAddress].launchBlock) *
+                tokenAntiBotData[tokenAddress].amountAddedPerBlock);
+            address router = address(
+                tokenAntiBotData[tokenAddress].routerAddress
+            );
+            if (tokenAntiBotData[tokenAddress].limitsInEffect) {
                 if (
-                    block.number <= _tokenAntiBotData[tokenAddress].launchBlock + _tokenAntiBotData[tokenAddress].deadBlocks &&
-                    from == address(_tokenAntiBotData[tokenAddress].pairAddress) &&
-                    to != _tokenAntiBotData[tokenAddress].routerAddress &&
-                    to != address(this) &&
-                    to != address(_tokenAntiBotData[tokenAddress].pairAddress)
+                    from != tokenAntiBotData[tokenAddress].owner &&
+                    to != tokenAntiBotData[tokenAddress].owner &&
+                    to != address(0) &&
+                    to != address(0xdead)
                 ) {
-                    blocked[tokenAddress][to] = true;
-                    emit BoughtEarly(to);
-                }
-
-                // at launch if the transfer delay is enabled, ensure the block timestamps for purchasers is set -- during launch.
-                if (_tokenAntiBotData[tokenAddress].transferDelayEnabled) {
                     if (
-                        to != _tokenAntiBotData[tokenAddress].owner &&
-                        to != address(_tokenAntiBotData[tokenAddress].routerAddress) &&
-                        to != address(_tokenAntiBotData[tokenAddress].pairAddress)
+                        block.number <=
+                        tokenAntiBotData[tokenAddress].launchBlock +
+                            tokenAntiBotData[tokenAddress].deadBlocks &&
+                        from ==
+                        address(tokenAntiBotData[tokenAddress].pairAddress) &&
+                        to != router &&
+                        to != address(this) &&
+                        to !=
+                        address(tokenAntiBotData[tokenAddress].pairAddress)
+                    ) {
+                        blocked[tokenAddress][to] = true;
+                        emit BoughtEarly(to);
+                    }
+
+                    // at launch if the transfer delay is enabled, ensure the block timestamps for purchasers is set -- during launch.
+                    if (tokenAntiBotData[tokenAddress].transferDelayEnabled) {
+                        if (
+                            to != tokenAntiBotData[tokenAddress].owner &&
+                            to != router &&
+                            to !=
+                            address(tokenAntiBotData[tokenAddress].pairAddress)
+                        ) {
+                            require(
+                                _holderLastTransferTimestamp[tokenAddress][
+                                    tx.origin
+                                ] +
+                                    tokenAntiBotData[tokenAddress]
+                                        .timeLimitPerTrade <
+                                    block.number,
+                                "Transfer Delay enabled.  Only one purchase per block allowed."
+                            );
+                            _holderLastTransferTimestamp[tokenAddress][
+                                tx.origin
+                            ] = block.number;
+                        }
+                    }
+
+                    //when buy
+                    if (
+                        automatedMarketMakerPairs[tokenAddress][from] &&
+                        !_isExcludedMaxTransactionAmount[tokenAddress][to]
                     ) {
                         require(
-                            _holderLastTransferTimestamp[tokenAddress][tx.origin] + _tokenAntiBotData[tokenAddress].timeLimitPerTrade <
-                                block.number,
-                            "_transfer:: Transfer Delay enabled.  Only one purchase per block allowed."
+                            amount <=
+                                tokenAntiBotData[tokenAddress]
+                                    .maxAmountPerTrade,
+                            "Buy transfer amount exceeds the maxTransactionAmount."
                         );
-                        _holderLastTransferTimestamp[tokenAddress][tx.origin] = block.number;
+                        require(
+                            amount + IERC20(tokenAddress).balanceOf(to) <=
+                                tokenAntiBotData[tokenAddress].maxWallet,
+                            "Max wallet exceeded"
+                        );
+                    }
+                    //when sell
+                    else if (
+                        automatedMarketMakerPairs[tokenAddress][to] &&
+                        !_isExcludedMaxTransactionAmount[tokenAddress][from]
+                    ) {
+                        require(
+                            amount <=
+                                tokenAntiBotData[tokenAddress]
+                                    .maxAmountPerTrade,
+                            "Sell transfer amount exceeds the maxTransactionAmount."
+                        );
+                    } else if (
+                        !_isExcludedMaxTransactionAmount[tokenAddress][to]
+                    ) {
+                        require(
+                            amount + IERC20(tokenAddress).balanceOf(to) <=
+                                tokenAntiBotData[tokenAddress].maxWallet,
+                            "Max wallet exceeded"
+                        );
                     }
                 }
-
-                //when buy
-                if (
-                    automatedMarketMakerPairs[tokenAddress][from] &&
-                    !_isExcludedMaxTransactionAmount[tokenAddress][to]
-                ) {
-                    require(
-                        amount <= _tokenAntiBotData[tokenAddress].maxAmountPerTrade,
-                        "Buy transfer amount exceeds the maxTransactionAmount."
-                    );
-                    require(
-                        amount + IERC20(tokenAddress).balanceOf(to) <=  _tokenAntiBotData[tokenAddress].maxWallet,
-                        "Max wallet exceeded"
-                    );
-                }
-                //when sell
-                else if (
-                    automatedMarketMakerPairs[tokenAddress][to] &&
-                    !_isExcludedMaxTransactionAmount[tokenAddress][from]
-                ) {
-                    require(
-                        amount <= _tokenAntiBotData[tokenAddress].maxAmountPerTrade,
-                        "Sell transfer amount exceeds the maxTransactionAmount."
-                    );
-                } else if (!_isExcludedMaxTransactionAmount[tokenAddress][to]) {
-                    require(
-                        amount + IERC20(tokenAddress).balanceOf(to) <=  _tokenAntiBotData[tokenAddress].maxWallet,
-                        "Max wallet exceeded"
-                    );
-                }
-            
+            }
         }
-        }
-        }   
-
-}
+    }
 
     function setValues(
         address tokenAddress,
         address _tokenB,
-        address _v2router,
+        IUniswapV2Router02 router,
         uint256 _limitPerTrade,
         uint256 _maxWallet,
         uint256 _deadBlocks,
         uint256 _timeLimitPerTrade,
-        uint256 _amountAddedPerBlock )external{
-        require(_tokenAntiBotData[tokenAddress].owner == msg.sender, "caller not owner of token");
-        IPancakeRouter02 router = IPancakeRouter02(_v2router);
-        // Create a PANCAKE pair for this new token 
-        if(IPancakeFactory(router.factory()).getPair(tokenAddress, _tokenB) == address(0)){
-            address panCakeSwapPair = IPancakeFactory(router.factory()).createPair(tokenAddress, _tokenB);
-             _tokenAntiBotData[tokenAddress].pairAddress = panCakeSwapPair;
-             automatedMarketMakerPairs[tokenAddress][panCakeSwapPair] = true;
-        }else{
-            address pairAddress = IPancakeFactory(router.factory()).getPair(tokenAddress, _tokenB);
-            automatedMarketMakerPairs[tokenAddress][pairAddress] = true;
-            _tokenAntiBotData[tokenAddress].pairAddress = pairAddress;
+        uint256 _amountAddedPerBlock
+    ) external onlyOwner(tokenAddress) {
+        address pairAddress = _getPair(router, tokenAddress, _tokenB);
+
+        if (pairAddress == address(0)) {
+            pairAddress = IUniswapV2Factory(router.factory()).createPair(
+                tokenAddress,
+                _tokenB
+            );
         }
-             _tokenAntiBotData[tokenAddress].routerAddress = _v2router;
-             _tokenAntiBotData[tokenAddress].maxAmountPerTrade = _limitPerTrade;
-             _tokenAntiBotData[tokenAddress].timeLimitPerTrade = _timeLimitPerTrade;
-             _tokenAntiBotData[tokenAddress].amountAddedPerBlock = _amountAddedPerBlock;
-             _tokenAntiBotData[tokenAddress].maxWallet =  _maxWallet;
-             _tokenAntiBotData[tokenAddress].launchBlock = block.number;
-             _tokenAntiBotData[tokenAddress].deadBlocks = _deadBlocks;
-             _tokenAntiBotData[tokenAddress].transferDelayEnabled = true;
-             _tokenAntiBotData[tokenAddress].limitsInEffect = true;
+        automatedMarketMakerPairs[tokenAddress][pairAddress] = true;
+        tokenAntiBotData[tokenAddress].routerAddress = router;
+        tokenAntiBotData[tokenAddress].maxAmountPerTrade = _limitPerTrade;
+        tokenAntiBotData[tokenAddress].timeLimitPerTrade = _timeLimitPerTrade;
+        tokenAntiBotData[tokenAddress]
+            .amountAddedPerBlock = _amountAddedPerBlock;
+        tokenAntiBotData[tokenAddress].maxWallet = _maxWallet;
+        tokenAntiBotData[tokenAddress].launchBlock = block.number;
+        tokenAntiBotData[tokenAddress].deadBlocks = _deadBlocks;
+        tokenAntiBotData[tokenAddress].transferDelayEnabled = true;
+        tokenAntiBotData[tokenAddress].limitsInEffect = true;
+        tokenAntiBotData[tokenAddress].pairAddress = pairAddress;
     }
 
-        function BlocKunBlockUsers(address tokenAddress, address[] memory _users, bool _status) external{
-            require(_tokenAntiBotData[tokenAddress].owner == msg.sender, "caller not owner of token");
-            for(uint256 i=0; i <_users.length; i++){
+    function updateBlocklist(
+        address tokenAddress,
+        address[] memory _users,
+        bool _status
+    ) external onlyOwner(tokenAddress) {
+        for (uint256 i = 0; i < _users.length; i++) {
             blocked[tokenAddress][_users[i]] = _status;
-            }
         }
-
-
+    }
 }

@@ -21,12 +21,11 @@ contract Lock02 is ILock {
     using Math for uint256;
 
     IDecentrapadNFT public lockNFT =
-        IDecentrapadNFT(0xAbD0170518F698b6f01501199F353cBfD30f8aD3);
+        IDecentrapadNFT(0x3843DA19Bc51E2e35272369308c1ab5c5626B92c);
 
     struct Lock {
         uint256 id;
         address token;
-        address owner;
         uint256 amount;
         uint256 lockDate;
         uint256 tgeDate; // TGE date for vesting locks, unlock date for normal locks
@@ -53,6 +52,7 @@ contract Lock02 is ILock {
     EnumerableSet.AddressSet private _normalLockedTokens;
     mapping(address => CumulativeLockInfo) public cumulativeLockInfo;
     mapping(address => EnumerableSet.UintSet) private _tokenToLockIds;
+    address constant dead = 0x000000000000000000000000000000000000dEaD;
 
     modifier validLock(uint256 lockId) {
         _getActualIndex(lockId);
@@ -91,7 +91,6 @@ contract Lock02 is ILock {
             amount
         );
         lockNFT.mint(owner, id);
-
         emit LockCreated(id, token, owner, amount, unlockDate);
         return id;
     }
@@ -196,7 +195,6 @@ contract Lock02 is ILock {
                 vestingSettings[3], // cycle bps
                 remarks
             );
-            lockNFT.mint(owners[i], ids[i]);
 
             emit LockCreated(
                 ids[i],
@@ -212,14 +210,13 @@ contract Lock02 is ILock {
             address(this),
             sumAmount
         );
+        lockNFT.batchMint(owners, ids);
         return ids;
     }
 
-    function _sumAmount(uint256[] calldata amounts)
-        internal
-        pure
-        returns (uint256)
-    {
+    function _sumAmount(
+        uint256[] calldata amounts
+    ) internal pure returns (uint256) {
         uint256 sum = 0;
         for (uint256 i = 0; i < amounts.length; i++) {
             if (amounts[i] == 0) {
@@ -281,7 +278,6 @@ contract Lock02 is ILock {
         string memory remarks
     ) private returns (uint256 id) {
         id = _registerLock(
-            owner,
             token,
             amount,
             tgeDate,
@@ -314,7 +310,6 @@ contract Lock02 is ILock {
         string memory remarks
     ) private returns (uint256 id) {
         id = _registerLock(
-            owner,
             token,
             amount,
             tgeDate,
@@ -337,7 +332,6 @@ contract Lock02 is ILock {
     }
 
     function _registerLock(
-        address owner,
         address token,
         uint256 amount,
         uint256 tgeDate,
@@ -350,7 +344,6 @@ contract Lock02 is ILock {
         Lock memory newLock = Lock({
             id: id,
             token: token,
-            owner: owner,
             amount: amount,
             lockDate: block.timestamp,
             tgeDate: tgeDate,
@@ -370,20 +363,16 @@ contract Lock02 is ILock {
         address lockOwner = lockNFT.ownerOf(lockId);
         require(msg.sender == lockOwner, "Not authorize to unlock");
 
-        lockNFT.transferFrom(
-            msg.sender,
-            0x000000000000000000000000000000000000dEaD,
-            lockId
-        );
+      //  lockNFT.transferFrom(msg.sender, dead, lockId);
 
         if (userLock.tgeBps > 0) {
-            _vestingUnlock(userLock);
+            _vestingUnlock(userLock, lockId);
         } else {
-            _normalUnlock(userLock);
+            _normalUnlock(userLock, lockId);
         }
     }
 
-    function _normalUnlock(Lock storage userLock) internal {
+    function _normalUnlock(Lock storage userLock, uint256 lockId) internal {
         require(
             block.timestamp >= userLock.tgeDate,
             "It is not time to unlock"
@@ -392,7 +381,7 @@ contract Lock02 is ILock {
 
         CumulativeLockInfo storage tokenInfo = cumulativeLockInfo[
             userLock.token
-        ];
+        ]; 
 
         bool isLpToken = tokenInfo.factory != address(0);
 
@@ -420,6 +409,8 @@ contract Lock02 is ILock {
         userLock.unlockedAmount = unlockAmount;
 
         _tokenToLockIds[userLock.token].remove(userLock.id);
+        //ransfer nft to dead address
+        lockNFT.transferFrom(msg.sender, dead, lockId);
 
         IERC20(userLock.token).safeTransfer(msg.sender, unlockAmount);
 
@@ -432,7 +423,7 @@ contract Lock02 is ILock {
         );
     }
 
-    function _vestingUnlock(Lock storage userLock) internal {
+    function _vestingUnlock(Lock storage userLock, uint256 lockId) internal {
         uint256 withdrawable = _withdrawableTokens(userLock);
         uint256 newTotalUnlockAmount = userLock.unlockedAmount + withdrawable;
         require(
@@ -476,6 +467,11 @@ contract Lock02 is ILock {
         }
         userLock.unlockedAmount = newTotalUnlockAmount;
 
+        if(userLock.unlockedAmount == userLock.amount){
+        //ransfer nft to dead address
+        lockNFT.transferFrom(msg.sender, dead, lockId);
+        }
+
         IERC20(userLock.token).safeTransfer(msg.sender, withdrawable);
 
         emit LockVested(
@@ -488,20 +484,16 @@ contract Lock02 is ILock {
         );
     }
 
-    function withdrawableTokens(uint256 lockId)
-        external
-        view
-        returns (uint256)
-    {
+    function withdrawableTokens(
+        uint256 lockId
+    ) external view returns (uint256) {
         Lock memory userLock = getLockById(lockId);
         return _withdrawableTokens(userLock);
     }
 
-    function _withdrawableTokens(Lock memory userLock)
-        internal
-        view
-        returns (uint256)
-    {
+    function _withdrawableTokens(
+        Lock memory userLock
+    ) internal view returns (uint256) {
         if (userLock.amount == 0) return 0;
         if (userLock.unlockedAmount >= userLock.amount) return 0;
         if (block.timestamp < userLock.tgeDate) return 0;
@@ -585,16 +577,14 @@ contract Lock02 is ILock {
         );
     }
 
-    function editLockremarks(uint256 lockId, string memory remarks)
-        external
-        validLock(lockId)
-    {
+    function editLockremarks(
+        uint256 lockId,
+        string memory remarks
+    ) external validLock(lockId) {
         Lock storage userLock = _locks[_getActualIndex(lockId)];
 
-        require(
-            msg.sender == lockNFT.ownerOf(lockId),
-            "Not authorize to unlock"
-        );
+        address currentUser = lockNFT.ownerOf(lockId);
+        require(msg.sender == currentUser, "Not authorize to unlock");
         userLock.remarks = remarks;
         emit LockremarksChanged(lockId);
     }
@@ -612,6 +602,40 @@ contract Lock02 is ILock {
             newRecipientBalance - oldRecipientBalance == amount,
             "Not enough token was transfered"
         );
+    }
+
+    function transferLockOwnership(
+        uint256 lockId,
+        address newOwner
+    ) public validLock(lockId) {
+        Lock storage userLock = _locks[_getActualIndex(lockId)];
+        address currentOwner = lockNFT.ownerOf(lockId);
+        require(
+            currentOwner == msg.sender,
+            "You are not the owner of this lock"
+        );
+
+        lockNFT.transferFrom(msg.sender, newOwner, lockId);
+
+        CumulativeLockInfo storage tokenInfo = cumulativeLockInfo[
+            userLock.token
+        ];
+
+        bool isLpToken = tokenInfo.factory != address(0);
+
+        if (isLpToken) {
+            _userLpLockIds[currentOwner].remove(lockId);
+            _userLpLockIds[newOwner].add(lockId);
+        } else {
+            _userNormalLockIds[currentOwner].remove(lockId);
+            _userNormalLockIds[newOwner].add(lockId);
+        }
+
+        emit LockOwnerChanged(lockId, currentOwner, newOwner);
+    }
+
+    function renounceLockOwnership(uint256 lockId) external {
+        transferLockOwnership(lockId, dead);
     }
 
     function getTotalLockCount() external view returns (uint256) {
@@ -635,27 +659,22 @@ contract Lock02 is ILock {
         return _normalLockedTokens.length();
     }
 
-    function getCumulativeLpTokenLockInfoAt(uint256 index)
-        external
-        view
-        returns (CumulativeLockInfo memory)
-    {
+    function getCumulativeLpTokenLockInfoAt(
+        uint256 index
+    ) external view returns (CumulativeLockInfo memory) {
         return cumulativeLockInfo[_lpLockedTokens.at(index)];
     }
 
-    function getCumulativeNormalTokenLockInfoAt(uint256 index)
-        external
-        view
-        returns (CumulativeLockInfo memory)
-    {
+    function getCumulativeNormalTokenLockInfoAt(
+        uint256 index
+    ) external view returns (CumulativeLockInfo memory) {
         return cumulativeLockInfo[_normalLockedTokens.at(index)];
     }
 
-    function getCumulativeLpTokenLockInfo(uint256 start, uint256 end)
-        external
-        view
-        returns (CumulativeLockInfo[] memory)
-    {
+    function getCumulativeLpTokenLockInfo(
+        uint256 start,
+        uint256 end
+    ) external view returns (CumulativeLockInfo[] memory) {
         if (end >= _lpLockedTokens.length()) {
             end = _lpLockedTokens.length() - 1;
         }
@@ -669,11 +688,10 @@ contract Lock02 is ILock {
         return lockInfo;
     }
 
-    function getCumulativeNormalTokenLockInfo(uint256 start, uint256 end)
-        external
-        view
-        returns (CumulativeLockInfo[] memory)
-    {
+    function getCumulativeNormalTokenLockInfo(
+        uint256 start,
+        uint256 end
+    ) external view returns (CumulativeLockInfo[] memory) {
         if (end >= _normalLockedTokens.length()) {
             end = _normalLockedTokens.length() - 1;
         }
@@ -697,11 +715,9 @@ contract Lock02 is ILock {
         return _userLpLockIds[user].length();
     }
 
-    function lpLocksForUser(address user)
-        external
-        view
-        returns (Lock[] memory)
-    {
+    function lpLocksForUser(
+        address user
+    ) external view returns (Lock[] memory) {
         uint256 length = _userLpLockIds[user].length();
         Lock[] memory userLocks = new Lock[](length);
         for (uint256 i = 0; i < length; i++) {
@@ -710,28 +726,23 @@ contract Lock02 is ILock {
         return userLocks;
     }
 
-    function lpLockForUserAtIndex(address user, uint256 index)
-        external
-        view
-        returns (Lock memory)
-    {
+    function lpLockForUserAtIndex(
+        address user,
+        uint256 index
+    ) external view returns (Lock memory) {
         require(lpLockCountForUser(user) > index, "Invalid index");
         return getLockById(_userLpLockIds[user].at(index));
     }
 
-    function normalLockCountForUser(address user)
-        public
-        view
-        returns (uint256)
-    {
+    function normalLockCountForUser(
+        address user
+    ) public view returns (uint256) {
         return _userNormalLockIds[user].length();
     }
 
-    function normalLocksForUser(address user)
-        external
-        view
-        returns (Lock[] memory)
-    {
+    function normalLocksForUser(
+        address user
+    ) external view returns (Lock[] memory) {
         uint256 length = _userNormalLockIds[user].length();
         Lock[] memory userLocks = new Lock[](length);
 
@@ -741,28 +752,23 @@ contract Lock02 is ILock {
         return userLocks;
     }
 
-    function normalLockForUserAtIndex(address user, uint256 index)
-        external
-        view
-        returns (Lock memory)
-    {
+    function normalLockForUserAtIndex(
+        address user,
+        uint256 index
+    ) external view returns (Lock memory) {
         require(normalLockCountForUser(user) > index, "Invalid index");
         return getLockById(_userNormalLockIds[user].at(index));
     }
 
-    function totalLockCountForUser(address user)
-        external
-        view
-        returns (uint256)
-    {
+    function totalLockCountForUser(
+        address user
+    ) external view returns (uint256) {
         return normalLockCountForUser(user) + lpLockCountForUser(user);
     }
 
-    function totalLockCountForToken(address token)
-        external
-        view
-        returns (uint256)
-    {
+    function totalLockCountForToken(
+        address token
+    ) external view returns (uint256) {
         return _tokenToLockIds[token].length();
     }
 
@@ -793,11 +799,9 @@ contract Lock02 is ILock {
         return actualIndex;
     }
 
-    function _parseFactoryAddress(address token)
-        internal
-        view
-        returns (address)
-    {
+    function _parseFactoryAddress(
+        address token
+    ) internal view returns (address) {
         address possibleFactoryAddress;
         try IUniswapV2Pair(token).factory() returns (address factory) {
             possibleFactoryAddress = factory;
@@ -812,11 +816,10 @@ contract Lock02 is ILock {
         return possibleFactoryAddress;
     }
 
-    function _isValidLpToken(address token, address factory)
-        private
-        view
-        returns (bool)
-    {
+    function _isValidLpToken(
+        address token,
+        address factory
+    ) private view returns (bool) {
         IUniswapV2Pair pair = IUniswapV2Pair(token);
         address factoryPair = IUniswapV2Factory(factory).getPair(
             pair.token0(),

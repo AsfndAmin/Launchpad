@@ -1355,14 +1355,14 @@ interface IUniswapV2Router02 is IUniswapV2Router01 {
 }
 
 
-// Dependency file: contracts/interfaces/IPinkAntiBot.sol
+// Dependency file: contracts/interfaces/IDecentraAntiBot.sol
 
 // pragma solidity >=0.5.0;
 
-interface IPinkAntiBot {
+interface IDecentraAntiBot {
   function setTokenOwner(address owner) external;
 
-  function onPreTransferCheck(
+  function transferValidation(
     address from,
     address to,
     uint256 amount
@@ -2803,7 +2803,7 @@ abstract contract BaseToken {
 
 // Root file: contracts/baby/AntiBotBabyToken.sol
 
-pragma solidity =0.8.4;
+pragma solidity ^0.8.4;
 
 // import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 // import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -2814,7 +2814,7 @@ pragma solidity =0.8.4;
 
 // import "contracts/interfaces/IUniswapV2Factory.sol";
 // import "contracts/interfaces/IUniswapV2Router02.sol";
-// import "contracts/interfaces/IPinkAntiBot.sol";
+// import "contracts/interfaces/IDecentraAntiBot.sol";
 // import "contracts/baby/BabyTokenDividendTracker.sol";
 // import "contracts/BaseToken.sol";
 
@@ -2852,7 +2852,7 @@ contract AntiBotBABYTOKEN is ERC20, Ownable, BaseToken {
     // could be subject to a maximum transfer amount
     mapping(address => bool) public automatedMarketMakerPairs;
 
-    IPinkAntiBot public pinkAntiBot;
+    IDecentraAntiBot public decentraAntiBot;
     bool public enableAntiBot;
 
     event ExcludeFromFees(address indexed account);
@@ -2903,8 +2903,8 @@ contract AntiBotBABYTOKEN is ERC20, Ownable, BaseToken {
             "Marketing wallet cannot be a contract"
         );
 
-        pinkAntiBot = IPinkAntiBot(addrs[4]);
-        pinkAntiBot.setTokenOwner(owner());
+        decentraAntiBot = IDecentraAntiBot(addrs[4]);
+        decentraAntiBot.setTokenOwner(owner());
         enableAntiBot = true;
 
         tokenRewardsFee = feeSettings[0];
@@ -3178,7 +3178,7 @@ contract AntiBotBABYTOKEN is ERC20, Ownable, BaseToken {
         require(to != address(0), "ERC20: transfer to the zero address");
 
         if (enableAntiBot) {
-            pinkAntiBot.onPreTransferCheck(from, to, amount);
+            decentraAntiBot.transferValidation(from, to, amount);
         }
 
         if (amount == 0) {
